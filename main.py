@@ -3,6 +3,7 @@ from tkinter import ttk, filedialog, messagebox
 import pandas as pd
 import sqlite3
 import os
+import re
 
 # Импортируем наши модули
 from data.connection import init_db, DB_NAME
@@ -13,7 +14,7 @@ from logic.processor import process_student_data
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Система учета успеваемости Skilspace")
+        self.root.title("Система учета успеваемости Skillspace")
         self.root.geometry("600x350")
         
         init_db()
@@ -24,21 +25,23 @@ class App:
         # --- Секция БД ---
         frame_db = tk.LabelFrame(self.root, text=" База данных УТП ", padx=10, pady=10)
         frame_db.pack(fill="x", padx=10, pady=10)
-        tk.Button(frame_db, text="➕ Загрузить новое УТП из PDF", command=self.import_pdf).pack(side="left")
+        tk.Button(frame_db, text="Загрузить новое УТП из PDF", command=self.import_pdf).pack(side="left")
         
-        tk.Label(self.root, text="Выберите учебный план (УТП):").pack(pady=(10,0))
+        tk.Label(self.root, text="Выберите УТП:").pack(pady=(10,0))
         self.utp_combo = ttk.Combobox(self.root, values=self.get_utp_list(), state="readonly", width=70)
         self.utp_combo.pack(pady=5)
+        if self.utp_combo['values']:
+            self.utp_combo.current(0)
 
-        # --- Секция Студента ---
+        # --- Секция студента ---
         frame_stud = tk.LabelFrame(self.root, text=" Данные студента ", padx=10, pady=10)
         frame_stud.pack(fill="x", padx=10, pady=10)
-        tk.Button(frame_stud, text="📂 Выбрать файл студента (.xlsx)", command=self.load_excel).pack(side="left")
+        tk.Button(frame_stud, text="Выбрать файл студента (.xlsx)", command=self.load_excel).pack(side="left")
         self.lbl_file = tk.Label(frame_stud, text="Файл не выбран", fg="gray", padx=10)
         self.lbl_file.pack(side="left")
 
         # --- Кнопка запуска ---
-        tk.Button(self.root, text="🚀 СФОРМИРОВАТЬ ТАБЕЛЬ (PDF)", 
+        tk.Button(self.root, text="СФОРМИРОВАТЬ ТАБЕЛЬ (PDF)", 
                   command=self.process_all, bg="#4CAF50", fg="white", 
                   font=("Arial", 10, "bold"), pady=10).pack(pady=30, fill="x", padx=10)
 
@@ -71,34 +74,55 @@ class App:
             self.lbl_file.config(text=os.path.basename(path), fg="black")
 
     def process_all(self):
-        utp_name = self.utp_combo.get()
-        if not utp_name or not self.excel_path:
-            messagebox.showwarning("Внимание", "Выберите УТП и файл Excel!")
-            return
+            utp_name = self.utp_combo.get()
+            if not utp_name or not self.excel_path:
+                messagebox.showwarning("Внимание", "Выберите УТП и файл Excel!")
+                return
 
-        try:
-            conn = sqlite3.connect(DB_NAME)
-            df_utp = pd.read_sql(
-                f"SELECT module_name as 'Модули', hours as 'Количество часов', control_form as 'Форма аттестации' "
-                f"FROM utp_modules WHERE utp_name='{utp_name}'", conn)
-            conn.close()
+            try:
+                # 1. Извлекаем данные студента из ячейки B1
+                df_header = pd.read_excel(self.excel_path, header=None, nrows=1)
+                student_info = str(df_header.iloc[0, 1]) if not df_header.empty else "Студент"
 
-            df_stud = pd.read_excel(self.excel_path)
-            
-            # Вызываем логику обработки из processor.py
-            report = process_student_data(df_utp, df_stud)
+                # 2. Загружаем структуру УТП из БД
+                conn = sqlite3.connect(DB_NAME)
+                df_utp = pd.read_sql(
+                    f"SELECT module_name as 'Модули', hours as 'Количество часов', control_form as 'Форма аттестации' "
+                    f"FROM utp_modules WHERE utp_name='{utp_name}'", conn)
+                conn.close()
 
-            save_p = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF", "*.pdf")])
-            if save_p:
-                save_report_to_pdf(report, save_p)
-                found_count = report['Средний процент'].notna().sum()
-                messagebox.showinfo("Готово", f"Создано! Найдено: {found_count} из {len(report)}")
-                os.startfile(save_p)
+                # 3. Загружаем ведомость студента
+                df_stud = pd.read_excel(self.excel_path)
+                
+                # ВЫЗОВ ЛОГИКИ ОБРАБОТКИ
+                report = process_student_data(df_utp, df_stud, utp_name)
 
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка обработки: {str(e)}")
+                # 4. Подготовка имени файла по умолчанию
+                # Очищаем имя от спецсимволов, чтобы Windows не ругался
+                clean_name = re.sub(r'[\\/*?:"<>|]', "", student_info)
+                default_filename = f"Табель_{clean_name}.pdf"
+
+                # 5. Сохранение в PDF с предложенным именем
+                save_p = filedialog.asksaveasfilename(
+                    initialfile=default_filename, # Вот тут магия
+                    defaultextension=".pdf", 
+                    filetypes=[("PDF", "*.pdf")]
+                )
+
+                if save_p:
+                    save_report_to_pdf(report, save_p, student_info)
+                    
+                    found_count = report['Средний процент'].notna().sum()
+                    messagebox.showinfo("Готово", f"Табель создан для: {student_info}\nНайдено совпадений: {found_count}")
+                    os.startfile(save_p)
+
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Произошел сбой: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()
+    # root.iconbitmap("myIcon.ico") # Убедись, что иконка есть, или закомментируй
+    root.resizable(width=False, height=False)
+    
     app = App(root)
     root.mainloop()

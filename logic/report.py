@@ -3,12 +3,15 @@ import pandas as pd
 from fpdf import FPDF
 
 class PDFReport(FPDF):
-    def __init__(self):
+    def __init__(self, student_info=""):
         super().__init__()
+        # Сохраняем информацию о студенте для заголовка
+        self.student_info = student_info 
         self.col_widths = [80, 30, 30, 25, 30]
         self.headers = ['Предмет', 'Форма контроля', 'Трудоемкость', 'Результат', 'Оценка']
 
     def header(self):
+        # Настройка шрифтов (поддержка кириллицы)
         font_path = r"C:\Windows\Fonts\arial.ttf"
         if os.path.exists(font_path):
             self.add_font('Arial', '', font_path, uni=True)
@@ -16,9 +19,12 @@ class PDFReport(FPDF):
         else:
             self.set_font('Helvetica', 'B', 12)
         
-        self.cell(0, 10, 'Табель успеваемости студента', ln=True, align='C')
+        # Вывод основной надписи и данных студента
+        title = f'Табель успеваемости: {self.student_info}'
+        self.cell(0, 10, title, ln=True, align='C') 
         self.ln(5)
-        # Рисуем шапку таблицы при создании новой страницы
+        
+        # Отрисовка шапки таблицы на каждой новой странице
         self.draw_table_header()
 
     def draw_table_header(self):
@@ -30,12 +36,12 @@ class PDFReport(FPDF):
 
     def get_row_height(self, text, width, line_height):
         """Вспомогательная функция для расчета высоты, которую займет текст"""
-        # Считаем, сколько строк займет текст в ячейке заданной ширины
         lines = self.multi_cell(width, line_height, text, split_only=True)
         return len(lines) * line_height
 
-def save_report_to_pdf(df, save_path):
-    pdf = PDFReport()
+def save_report_to_pdf(df, save_path, student_info=""):
+    # Передаем student_info в конструктор класса
+    pdf = PDFReport(student_info=student_info)
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
@@ -44,26 +50,23 @@ def save_report_to_pdf(df, save_path):
     for _, row in df.iterrows():
         text = str(row['Модули'])
         
-        # 1. Считаем высоту будущей строки заранее
+        # 1. Расчет высоты строки для контроля переноса страницы
         calculated_height = pdf.get_row_height(text, pdf.col_widths[0], line_height)
         
-        # 2. Проверяем: если текущая позиция Y + высота строки > лимита страницы
-        # Лимит страницы обычно ~270-280мм для A4
+        # 2. Перенос на новую страницу, если строка не влезает
         if pdf.get_y() + calculated_height > 270:
-            pdf.add_page() # Это автоматически вызовет header() и нарисует шапку
+            pdf.add_page() 
             
-        # Запоминаем координаты после того, как убедились, что страница верная
         x_start = pdf.get_x()
         y_start = pdf.get_y()
 
-        # 3. Рисуем первую колонку (название)
+        # 3. Отрисовка первой колонки (название модуля)
         pdf.multi_cell(pdf.col_widths[0], line_height, text, border=1, align='L')
         
-        # Получаем реальную высоту, которую заняла ячейка
         y_end = pdf.get_y()
         total_row_height = y_end - y_start
         
-        # 4. Дорисовываем остальные колонки
+        # 4. Отрисовка остальных колонок с выравниванием по высоте первой
         current_x = x_start + pdf.col_widths[0]
         other_cols = [
             str(row['Форма аттестации']),
@@ -77,7 +80,7 @@ def save_report_to_pdf(df, save_path):
             pdf.cell(pdf.col_widths[i+1], total_row_height, content, border=1, align='C')
             current_x += pdf.col_widths[i+1]
         
-        # Переходим строго в начало следующей строки
+        # Возврат курсора в начало следующей строки
         pdf.set_xy(x_start, y_end)
 
     pdf.output(save_path)
