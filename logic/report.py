@@ -7,7 +7,7 @@ class PDFReport(FPDF):
         super().__init__()
         # Сохраняем информацию о студенте для заголовка
         self.student_info = student_info 
-        self.col_widths = [80, 30, 30, 25, 30]
+        self.col_widths = [80, 30, 25, 20, 40]
         self.headers = ['Предмет', 'Форма контроля', 'Трудоемкость', 'Результат', 'Оценка']
 
     def header(self):

@@ -4,3 +4,6 @@ myIcon.ico
 /build
 signature.py
 /Skillspace.egg-info
+*.pyc
+*.pyc
+logic/__pycache__/parser.cpython-314.pyc
