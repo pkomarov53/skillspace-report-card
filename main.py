@@ -6,7 +6,7 @@ import os
 import re
 from fuzzywuzzy import fuzz
 
-# Импортируем наши логические модули
+# Логические модули
 from data.connection import init_db, DB_NAME
 from logic.parser import extract_utp_from_pdf, extract_grades_from_pdf
 from logic.report import save_report_to_pdf
@@ -17,8 +17,8 @@ from logic.xlsx_parse import filter_skillspace_data
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Система учета успеваемости Skillspace")
-        self.root.geometry("700x550")
+        self.root.title("Обработчик ведомостей Skillspace")
+        self.root.geometry("700x350")
         
         init_db()
         self.excel_path = None
@@ -117,7 +117,7 @@ class App:
                 df_processed = filter_skillspace_data(df_raw)
                 
                 # 3. Сохраняем результат в промежуточный файл для вашей проверки
-                temp_filename = "temp_processed_check.xlsx"
+                temp_filename = "data/temp_processed_check.xlsx"
                 df_processed.to_excel(temp_filename, index=False)
                 
                 # Сохраняем данные в памяти программы для дальнейшей работы

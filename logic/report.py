@@ -1,86 +1,60 @@
 import os
 import pandas as pd
+
 from fpdf import FPDF
+from fpdf.fonts import FontFace
 
 class PDFReport(FPDF):
-    def __init__(self, student_info=""):
+    def __init__(self, student_info: str = "", font_path: str = r"C:\Windows\Fonts\arial.ttf"):
         super().__init__()
-        # Сохраняем информацию о студенте для заголовка
         self.student_info = student_info 
-        self.col_widths = [80, 30, 25, 20, 40]
-        self.headers = ['Предмет', 'Форма контроля', 'Трудоемкость', 'Результат', 'Оценка']
-
-    def header(self):
-        # Настройка шрифтов (поддержка кириллицы)
-        font_path = r"C:\Windows\Fonts\arial.ttf"
+        
         if os.path.exists(font_path):
             self.add_font('Arial', '', font_path, uni=True)
-            self.set_font('Arial', '', 12)
+            self.default_font = 'Arial'
         else:
-            self.set_font('Helvetica', 'B', 12)
-        
-        # Вывод основной надписи и данных студента
+            self.default_font = 'Helvetica'
+
+    def header(self):
+        self.set_font(self.default_font, '', 12)
         title = f'Табель успеваемости: {self.student_info}'
         self.cell(0, 10, title, ln=True, align='C') 
         self.ln(5)
-        
-        # Отрисовка шапки таблицы на каждой новой странице
-        self.draw_table_header()
 
-    def draw_table_header(self):
-        self.set_font('Arial', '', 9)
-        self.set_fill_color(230, 230, 230)
-        for i in range(len(self.headers)):
-            self.cell(self.col_widths[i], 10, self.headers[i], border=1, align='C', fill=True)
-        self.ln()
 
-    def get_row_height(self, text, width, line_height):
-        """Вспомогательная функция для расчета высоты, которую займет текст"""
-        lines = self.multi_cell(width, line_height, text, split_only=True)
-        return len(lines) * line_height
-
-def save_report_to_pdf(df, save_path, student_info=""):
-    # Передаем student_info в конструктор класса
-    pdf = PDFReport(student_info=student_info)
+def save_report_to_pdf(df: pd.DataFrame, save_path: str, student_info: str = "", font_path: str = r"C:\Windows\Fonts\arial.ttf"):
+    pdf = PDFReport(student_info=student_info, font_path=font_path)
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    
-    line_height = 7
-    
-    for _, row in df.iterrows():
-        text = str(row['Модули'])
-        
-        # 1. Расчет высоты строки для контроля переноса страницы
-        calculated_height = pdf.get_row_height(text, pdf.col_widths[0], line_height)
-        
-        # 2. Перенос на новую страницу, если строка не влезает
-        if pdf.get_y() + calculated_height > 270:
-            pdf.add_page() 
-            
-        x_start = pdf.get_x()
-        y_start = pdf.get_y()
 
-        # 3. Отрисовка первой колонки (название модуля)
-        pdf.multi_cell(pdf.col_widths[0], line_height, text, border=1, align='L')
+    pdf.set_font(pdf.default_font, '', 9)
+    
+    col_widths = (80, 30, 25, 20, 40)
+    headers = ('Предмет', 'Форма контроля', 'Трудоемкость', 'Результат', 'Оценка')
+    
+    with pdf.table(
+        col_widths=col_widths,
+        text_align=("LEFT", "CENTER", "CENTER", "CENTER", "CENTER"),
+        borders_layout="ALL",
+        first_row_as_headings=True,
+        line_height=7,
+        headings_style=FontFace(emphasis="") 
+    ) as table:
         
-        y_end = pdf.get_y()
-        total_row_height = y_end - y_start
-        
-        # 4. Отрисовка остальных колонок с выравниванием по высоте первой
-        current_x = x_start + pdf.col_widths[0]
-        other_cols = [
-            str(row['Форма аттестации']),
-            str(row['Количество часов']),
-            f"{row['Средний процент']:.1f}%" if pd.notna(row['Средний процент']) else "-",
-            str(row['Итоговая оценка'])
-        ]
-        
-        for i, content in enumerate(other_cols):
-            pdf.set_xy(current_x, y_start)
-            pdf.cell(pdf.col_widths[i+1], total_row_height, content, border=1, align='C')
-            current_x += pdf.col_widths[i+1]
-        
-        # Возврат курсора в начало следующей строки
-        pdf.set_xy(x_start, y_end)
+        row = table.row()
+        for header in headers:
+            row.cell(header)
+
+        for data in df.to_dict('records'):
+            row = table.row()
+            
+            avg_percent = data.get('Средний процент')
+            avg_str = f"{avg_percent:.1f}%" if pd.notna(avg_percent) else "-"
+            
+            row.cell(str(data.get('Модули', '')))
+            row.cell(str(data.get('Форма аттестации', '')))
+            row.cell(str(data.get('Количество часов', '')))
+            row.cell(avg_str)
+            row.cell(str(data.get('Итоговая оценка', '')))
 
     pdf.output(save_path)

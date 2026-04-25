@@ -5,3 +5,4 @@ signature.py
 /Skillspace.egg-info
 *.pyc
 
+/logic/__pycache__
