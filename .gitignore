@@ -6,3 +6,4 @@ signature.py
 *.pyc
 
 /logic/__pycache__
+*.pyc
