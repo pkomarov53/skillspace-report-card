@@ -11,9 +11,8 @@ from fuzzywuzzy import fuzz
 from data.connection import init_db, DB_NAME
 from logic.parser import extract_utp_from_pdf, extract_grades_from_pdf
 from logic.report import save_report_to_pdf
-from logic.processor import process_student_data
+from logic.processor import process_student_data, filter_skillspace_data
 from logic.courseID import course_list
-from logic.xlsx_parse import filter_skillspace_data
 
 class App:
     def __init__(self, root: tk.Tk):

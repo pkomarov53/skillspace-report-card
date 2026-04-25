@@ -2,7 +2,43 @@ import pandas as pd
 import re
 import json
 import os
+import pandas as pd
+import numpy as np
+
 from fuzzywuzzy import fuzz
+
+def filter_skillspace_data(df):
+    df['ФИО_Заголовок'] = (
+        df['Фамилия'].fillna('') + ' ' + 
+        df['Имя'].fillna('') + ' ' + 
+        df['Отчество'].fillna('')
+    ).str.strip()
+
+    names_list = df['ФИО_Заголовок'].tolist()
+
+    df_t = df.T.reset_index()
+
+    df_t.columns = ['Параметр'] + names_list
+
+    for col in df_t.columns:
+        df_t[col] = df_t[col].apply(
+            lambda x: str(x).replace('\n', ' ').replace('\r', '').replace('\t', ' ').strip() 
+            if pd.notnull(x) else np.nan
+        )
+
+    mask_include = df_t['Параметр'].str.contains('Получено баллов', case=False, na=False)
+    mask_exclude = ~df_t['Параметр'].str.contains('Статус', case=False, na=False)
+
+    df_filtered = df_t[mask_include & mask_exclude].copy()
+
+    df_filtered = df_filtered[df_filtered['Параметр'] != 'ФИО_Заголовок']
+
+    df_filtered[names_list] = df_filtered[names_list].replace(r'^\s*$', np.nan, regex=True)
+    df_filtered[names_list] = df_filtered[names_list].replace(['nan', 'NaN', 'None'], np.nan)
+    
+    df_filtered = df_filtered.dropna(subset=names_list, how='all')
+
+    return df_filtered
 
 def load_config():
     if os.path.exists('data/settings.json'):
