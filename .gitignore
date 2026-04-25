@@ -1,11 +1,7 @@
 data/academy_database.db
-settings.json
-myIcon.ico
+data/settings.json
 /build
 signature.py
 /Skillspace.egg-info
 *.pyc
-*.pyc
-logic/__pycache__/parser.cpython-314.pyc
-*.pyc
-/logic/__pycache__
+
