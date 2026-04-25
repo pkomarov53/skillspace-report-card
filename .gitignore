@@ -7,3 +7,4 @@ signature.py
 *.pyc
 *.pyc
 logic/__pycache__/parser.cpython-314.pyc
+*.pyc

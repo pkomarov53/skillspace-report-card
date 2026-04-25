@@ -5,9 +5,8 @@ import os
 from fuzzywuzzy import fuzz
 
 def load_config():
-    """Безопасная загрузка настроек с проверкой существования файла"""
-    if os.path.exists('settings.json'):
-        with open('settings.json', 'r', encoding='utf-8') as f:
+    if os.path.exists('data/settings.json'):
+        with open('data/settings.json', 'r', encoding='utf-8') as f:
             try:
                 data = json.load(f)
                 print("--- Конфигурация settings.json успешно загружена ---")
@@ -19,10 +18,9 @@ def load_config():
     return {}
 
 def normalize_name(text):
-    """Единая очистка имен для сопоставления (убираем мусор, кавычки, номера)"""
     if not isinstance(text, str): return ""
     # 1. Убираем "Тестирование по модулю", "Практикум", "Кейс" и т.д.
-    text = re.sub(r'(?i)тестирование по модулю|практическое задание по модулю|практикум|кейс|лекция №\d+|вступление', '', text)
+    text = re.sub(r'(?i)тестирование по модулю|практическое задание по модулю|практикум|кейс|лекция №\d+|вступление|получено баллов', '', text)
     # 2. Убираем номера в начале строки (например "1. ", "10. ")
     text = re.sub(r'^\d+[\s\.)]+', '', text)
     # 3. Убираем спецсимволы и кавычки
@@ -30,13 +28,11 @@ def normalize_name(text):
     return text.strip().lower()
 
 def extract_score(val):
-    """Извлекает число из строки 'Завершено, 19 баллов'"""
     if pd.isna(val): return None
     res = re.findall(r'(\d+)', str(val))
     return float(res[0]) if res else None
 
 def get_grade_label(row):
-    """Логика выставления оценки по проценту"""
     score = row['Средний процент']
     form = str(row['Форма аттестации'])
     
@@ -79,7 +75,7 @@ def process_student_data(df_utp, df_stud, utp_name):
         norm_db_name = normalize_name(db_module_original)
         best_score = None
         
-        # --- ШАГ 1: ПРОВЕРКА SETTINGS.JSON (Приоритет) ---
+        # Приоритет
         rule_max = None
         
         # Ищем в нормализованном конфиге
@@ -94,7 +90,7 @@ def process_student_data(df_utp, df_stud, utp_name):
 
         if rule_max is not None:
             if rule_max == 0:
-                best_score = 100.0  # Логика с 0: сразу даем 100%
+                best_score = 100.0
                 print(f"Применено правило 0% для: {db_module_original}")
             else:
                 # Если макс. балл указан (например 20), ищем балл в ведомости
@@ -110,7 +106,7 @@ def process_student_data(df_utp, df_stud, utp_name):
                     best_score = (found_raw / rule_max) * 100
                     print(f"Расчет по конфигу ({rule_max}): {db_module_original} -> {best_score}%")
 
-        # --- ШАГ 2: ЕСЛИ В КОНФИГЕ НЕ НАШЛИ (Fallback) ---
+        # Fallback
         if best_score is None:
             found_raw = None
             highest_ratio = 0

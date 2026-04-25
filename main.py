@@ -11,6 +11,8 @@ from data.connection import init_db, DB_NAME
 from logic.parser import extract_utp_from_pdf, extract_grades_from_pdf
 from logic.report import save_report_to_pdf
 from logic.processor import process_student_data
+from logic.courseID import course_list
+from logic.xlsx_parse import filter_skillspace_data
 
 class App:
     def __init__(self, root):
@@ -24,6 +26,7 @@ class App:
         self.setup_ui()
 
     def setup_ui(self):
+        
         # --- Секция БД ---
         frame_db = tk.LabelFrame(self.root, text=" 1. Настройка Учебных Планов (УТП) ", padx=10, pady=10)
         frame_db.pack(fill="x", padx=10, pady=10)
@@ -82,8 +85,51 @@ class App:
     def load_excel(self):
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
         if path:
-            self.excel_path = path
-            self.lbl_file.config(text=os.path.basename(path), fg="black")
+            raw_utp_name = self.utp_combo.get()
+            if not raw_utp_name:
+                messagebox.showwarning("Внимание", "Сначала выберите УТП!")
+                return
+
+            clean_utp_name = " ".join(raw_utp_name.split())
+            course_id = None
+            for key, val in course_list.items():
+                if " ".join(key.split()) == clean_utp_name:
+                    course_id = val
+                    break
+            
+            if not course_id:
+                messagebox.showwarning("Внимание", f"ID не найден для: {raw_utp_name}")
+                return
+
+            try:
+                xl = pd.ExcelFile(path)
+                target_sheet = next((s for s in xl.sheet_names if str(course_id) in s), None)
+                
+                if not target_sheet:
+                    messagebox.showwarning("Внимание", f"Лист с ID {course_id} не найден!")
+                    return
+
+                # --- ТУТ ПРОИСХОДИТ ОБРАБОТКА ---
+                # 1. Читаем сырые данные
+                df_raw = pd.read_excel(path, sheet_name=target_sheet)
+                
+                # 2. Прогоняем через фильтр из xlsx_parse.py
+                df_processed = filter_skillspace_data(df_raw)
+                
+                # 3. Сохраняем результат в промежуточный файл для вашей проверки
+                temp_filename = "temp_processed_check.xlsx"
+                df_processed.to_excel(temp_filename, index=False)
+                
+                # Сохраняем данные в памяти программы для дальнейшей работы
+                self.excel_path = path
+                self.target_sheet = target_sheet
+                self.current_df = df_processed # Сохраняем уже обработанный DF
+                
+                self.lbl_file.config(text=f"Выбрано: {target_sheet}", fg="green")
+                messagebox.showinfo("Готово", f"Лист обработан и очищен.\nРезультат в {temp_filename}")
+
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Ошибка обработки: {e}")
 
     def load_recredits(self):
         path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
@@ -92,17 +138,13 @@ class App:
             self.lbl_re.config(text=f"Прикреплен: {os.path.basename(path)}", fg="green")
 
     def clean_text(self, text):
-        """Очистка для сопоставления названий"""
         if not text: return ""
         text = str(text).lower()
-        # Удаляем "Модуль X", "Тема X" и т.д.
         text = re.sub(r'^(модуль|тема|раздел|лекция)\s*\d+[\s\.]*', '', text)
-        # Оставляем только буквы
         text = re.sub(r'[^а-яёa-z\s]', ' ', text)
         return " ".join(text.split())
 
     def get_final_grade_text(self, percent, control_form):
-        """Логика формирования текста оценки на основе формы контроля"""
         form = str(control_form).lower()
         
         # Если форма контроля подразумевает оценку (Экзамен или Зачет с оценкой)
@@ -118,32 +160,43 @@ class App:
 
     def process_all(self):
         utp_name = self.utp_combo.get()
-        if not utp_name or not self.excel_path:
-            messagebox.showwarning("Внимание", "Выберите УТП и файл Excel!")
+        
+        # Проверяем, что УТП выбрано и данные уже загружены и обработаны в load_excel
+        if not utp_name or not hasattr(self, 'current_df') or self.current_df is None:
+            messagebox.showwarning("Внимание", "Сначала выберите УТП и загрузите файл Excel (кнопка 'Выбрать ведомость')!")
             return
 
         try:
-            # 1. Студент (из ячейки B1)
-            df_header = pd.read_excel(self.excel_path, header=None, nrows=1)
-            student_info = str(df_header.iloc[0, 1]) if not df_header.empty else "Студент"
+            # 1. Получаем список студентов из нашей обработанной таблицы
+            # Напомню: первая колонка там 'Параметр', остальные — ФИО студентов
+            all_students = [col for col in self.current_df.columns if col != 'Параметр']
+            
+            if not all_students:
+                messagebox.showwarning("Ошибка", "Студенты в обработанном листе не найдены!")
+                return
 
-            # 2. УТП из базы
+            # Если ваша программа рассчитана на создание одного табеля за раз,
+            # берем первого студента из списка. 
+            student_info = all_students[0] 
+
+            # 2. УТП из базы (остается без изменений)
             conn = sqlite3.connect(DB_NAME)
             df_utp = pd.read_sql(
                 f"SELECT module_name as 'Модули', hours as 'Количество часов', control_form as 'Форма аттестации' "
                 f"FROM utp_modules WHERE utp_name='{utp_name}'", conn)
             conn.close()
 
-            # 3. Основной расчет из Skillspace
-            df_stud = pd.read_excel(self.excel_path)
-            report = process_student_data(df_utp, df_stud, utp_name)
+            # 3. Основной расчет (Skillspace)
+            # Теперь мы передаем уже отфильтрованный и транспонированный self.current_df
+            # ВАЖНО: Функция process_student_data внутри processor.py должна уметь 
+            # работать с этим форматом (где параметры в строках).
+            report = process_student_data(df_utp, self.current_df, utp_name)
 
-            # 4. ОБРАБОТКА ПЕРЕЗАЧЕТОВ
+            # 4. Перезачеты (Ваша логика остается нетронутой)
             if self.recredits_path:
                 df_re = extract_grades_from_pdf(self.recredits_path)
                 
                 for idx, row in report.iterrows():
-                    # Текущий результат (Skillspace)
                     cur_val = row['Средний процент']
                     current_score = float(cur_val) if pd.notna(cur_val) and str(cur_val).replace('.','').isdigit() else 0.0
                     
@@ -151,28 +204,21 @@ class App:
                     best_match_ratio = 0
                     best_re_row = None
                     
-                    # Поиск совпадения в PDF
                     for _, re_row in df_re.iterrows():
                         re_mod_clean = self.clean_text(re_row['module_name'])
-                        # Используем token_set_ratio для вложенных названий (Клиническая психология)
                         ratio = fuzz.token_set_ratio(utp_mod_clean, re_mod_clean)
                         if ratio > best_match_ratio:
                             best_match_ratio = ratio
                             best_re_row = re_row
                     
-                    # Если нашли предмет (>80%)
                     if best_match_ratio > 80 and best_re_row is not None:
                         new_score = float(best_re_row['re_score'])
-                        
-                        # Заменяем, только если оценка ВЫШЕ
                         if new_score > current_score:
                             report.at[idx, 'Средний процент'] = new_score
-                            
-                            # Получаем текст оценки исходя из ТРЕБОВАНИЙ УТП (Экзамен или Зачет)
                             grade_text = self.get_final_grade_text(new_score, row['Форма аттестации'])
                             report.at[idx, 'Итоговая оценка'] = f"{grade_text} (перезачет)"
 
-            # 5. Сохранение результата
+            # 5. Сохранение результата (Ваша логика остается нетронутой)
             clean_name = re.sub(r'[\\/*?:"<>|]', "", student_info)
             save_p = filedialog.asksaveasfilename(
                 initialfile=f"Табель_{clean_name}.pdf",
@@ -185,7 +231,7 @@ class App:
                 messagebox.showinfo("Успех", f"Табель для {student_info} готов.")
 
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Произошел сбой: {e}")
+            messagebox.showerror("Ошибка", f"Произошел сбой при генерации: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()
