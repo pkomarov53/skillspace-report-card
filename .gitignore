@@ -2,6 +2,7 @@
 signature.py
 /Skillspace.egg-info
 *.pyc
+*.7z
 
 /logic/__pycache__
 *.pyc
