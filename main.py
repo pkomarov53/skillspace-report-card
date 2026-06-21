@@ -80,7 +80,7 @@ class App:
                 df.to_sql('utp_modules', conn, if_exists='append', index=False)
             
             self.utp_combo['values'] = self.get_utp_list()
-            self.utp_combo.set(name) # Автоматически выбираем загруженный план
+            self.utp_combo.set(name)
             messagebox.showinfo("Успех", f"УТП '{name}' успешно добавлено!")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось прочитать PDF: {e}")
@@ -104,30 +104,45 @@ class App:
             messagebox.showwarning("Внимание", f"ID не найден для: {raw_utp_name}")
             return
 
+        course_ids = course_id if isinstance(course_id, list) else [course_id]
+
         try:
             xl = pd.ExcelFile(path)
-            target_sheet = next((s for s in xl.sheet_names if str(course_id) in s), None)
+            target_sheets = []
             
-            if not target_sheet:
-                messagebox.showwarning("Внимание", f"Лист с ID {course_id} не найден!")
+            for cid in course_ids:
+                sheet = next((s for s in xl.sheet_names if str(cid) in s), None)
+                if sheet:
+                    target_sheets.append(sheet)
+            
+            if not target_sheets:
+                messagebox.showwarning("Внимание", f"Листы для ID {course_ids} не найдены in файле!")
                 return
 
-            # Чтение и обработка
-            df_raw = pd.read_excel(path, sheet_name=target_sheet)
-            df_processed = filter_skillspace_data(df_raw)
+            processed_dfs = []
+            for sheet in target_sheets:
+                df_raw = pd.read_excel(path, sheet_name=sheet)
+                df_processed = filter_skillspace_data(df_raw)
+                if not df_processed.empty:
+                    df_processed['Имя_Листа'] = sheet
+                    processed_dfs.append(df_processed)
             
-            # Сохранение промежуточного файла с использованием pathlib
+            if not processed_dfs:
+                messagebox.showwarning("Внимание", "Не удалось извлечь данные из выбранных листов!")
+                return
+                
+            df_combined = pd.concat(processed_dfs, axis=0, ignore_index=True, sort=False)
+            
             temp_filename = Path("data/temp_processed_check.xlsx")
-            temp_filename.parent.mkdir(parents=True, exist_ok=True) # Защита, если папки data нет
-            df_processed.to_excel(temp_filename, index=False)
+            temp_filename.parent.mkdir(parents=True, exist_ok=True) 
+            df_combined.to_excel(temp_filename, index=False)
             
-            # Обновление состояния приложения
             self.excel_path = path
-            self.target_sheet = target_sheet
-            self.current_df = df_processed
+            self.target_sheet = ", ".join(target_sheets)
+            self.current_df = df_combined
             
-            self.lbl_file.config(text=f"Выбрано: {target_sheet}", fg="green")
-            messagebox.showinfo("Готово", f"Лист обработан.\nРезультат сохранен в {temp_filename}")
+            self.lbl_file.config(text=f"Выбрано листов: {len(target_sheets)}", fg="green")
+            messagebox.showinfo("Готово", f"Успешно обработано листов: {len(target_sheets)}.\nРезультат сохранен в {temp_filename}")
 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка обработки Excel: {e}")
@@ -151,13 +166,11 @@ class App:
     @staticmethod
     def get_final_grade_text(percent: float, control_form: str) -> str:
         form = str(control_form).lower()
-        
         if any(keyword in form for keyword in ["экзамен", "оценкой", "дифф"]):
             if percent >= 85: return "5 (отл.)"
             if percent >= 70: return "4 (хор.)"
             if percent >= 50: return "3 (уд.)"
             return "2 (неуд.)"
-            
         return "Зачет" if percent >= 50 else "Незачет"
 
     def process_all(self):
@@ -168,14 +181,13 @@ class App:
             return
 
         try:
-            all_students = [col for col in self.current_df.columns if col != 'Параметр']
+            all_students = [col for col in self.current_df.columns if col not in ['Параметр', 'Имя_Листа', 'CleanName', 'ScoreValue']]
             if not all_students:
                 messagebox.showwarning("Ошибка", "Студенты в обработанном листе не найдены!")
                 return
 
             student_info = all_students[0] 
 
-            # Запрашиваем УТП
             query = """
                 SELECT module_name as 'Модули', 
                        hours as 'Количество часов', 
@@ -186,17 +198,15 @@ class App:
             with sqlite3.connect(DB_NAME) as conn:
                 df_utp = pd.read_sql(query, conn, params=(utp_name,))
 
-            report = process_student_data(df_utp, self.current_df, utp_name)
+            # ТЕПЕРЬ ПЕРЕДАЕМ ИМЯ СТУДЕНТА ДЛЯ СТРОГОЙ ФИЛЬТРАЦИИ ПО НАЗВАНИЮ КОЛОНКИ
+            report = process_student_data(df_utp, self.current_df, utp_name, student_info)
 
-            # Перезачеты
             if self.recredits_path:
                 df_re = extract_grades_from_pdf(self.recredits_path)
-                
                 df_re['clean_module'] = df_re['module_name'].apply(self.clean_text)
                 
                 for idx, row in report.iterrows():
                     cur_val = row['Средний процент']
-                    
                     try:
                         current_score = float(cur_val) if pd.notna(cur_val) else 0.0
                     except ValueError:
@@ -208,7 +218,6 @@ class App:
                     
                     for _, re_row in df_re.iterrows():
                         ratio = fuzz.token_set_ratio(utp_mod_clean, re_row['clean_module'])
-                        
                         if ratio > best_match_ratio and ratio > 80:
                             best_match_ratio = ratio
                             try:
