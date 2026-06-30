@@ -18,13 +18,14 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Обработчик ведомостей Skillspace")
-        self.root.geometry("700x350")
+        self.root.geometry("700x390")
         self.root.resizable(width=False, height=False)
         
         init_db()
         
         self.excel_path: str | None = None
         self.recredits_path: str | None = None
+        self.coaching_path: str | None = None
         self.target_sheet: str | None = None
         self.current_df: pd.DataFrame | None = None
         
@@ -54,6 +55,11 @@ class App:
         btn_re.grid(row=1, column=0, padx=5, pady=5)
         self.lbl_re = tk.Label(frame_stud, text="Необязательно", fg="gray")
         self.lbl_re.grid(row=1, column=1, sticky="w")
+
+        btn_co = tk.Button(frame_stud, text="Загрузить ведомость коучинга (PDF)", command=self.load_coaching, width=35, bg="#e3f2fd")
+        btn_co.grid(row=2, column=0, padx=5, pady=5)
+        self.lbl_co = tk.Label(frame_stud, text="Необязательно", fg="gray")
+        self.lbl_co.grid(row=2, column=1, sticky="w")
 
         tk.Button(self.root, text="СФОРМИРОВАТЬ ИТОГОВЫЙ ТАБЕЛЬ", 
                   command=self.process_all, bg="#4CAF50", fg="white", 
@@ -154,6 +160,12 @@ class App:
             self.recredits_path = path
             self.lbl_re.config(text=f"Прикреплен: {Path(path).name}", fg="green")
 
+    def load_coaching(self):
+        path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
+        if path:
+            self.coaching_path = path
+            self.lbl_co.config(text=f"Прикреплен: {Path(path).name}", fg="green")
+
     @staticmethod
     def clean_text(text: str) -> str:
         if not text or pd.isna(text):
@@ -198,9 +210,9 @@ class App:
             with sqlite3.connect(DB_NAME) as conn:
                 df_utp = pd.read_sql(query, conn, params=(utp_name,))
 
-            # ТЕПЕРЬ ПЕРЕДАЕМ ИМЯ СТУДЕНТА ДЛЯ СТРОГОЙ ФИЛЬТРАЦИИ ПО НАЗВАНИЮ КОЛОНКИ
             report = process_student_data(df_utp, self.current_df, utp_name, student_info)
 
+            # 1. ОБРАБОТКА СТАНДАРТНЫХ ПЕРЕЗАЧЕТОВ
             if self.recredits_path:
                 df_re = extract_grades_from_pdf(self.recredits_path)
                 df_re['clean_module'] = df_re['module_name'].apply(self.clean_text)
@@ -231,6 +243,66 @@ class App:
                         report.at[idx, 'Средний процент'] = best_score
                         grade_text = self.get_final_grade_text(best_score, row['Форма аттестации'])
                         report.at[idx, 'Итоговая оценка'] = f"{grade_text} (перезачет)"
+
+            # 2. ОБРАБОТКА МАРШРУТИЗАЦИИ ИЗ СТАРОГО КОУЧИНГА
+            if self.coaching_path:
+                df_co = extract_grades_from_pdf(self.coaching_path)
+                df_co['clean_coaching'] = df_co['module_name'].apply(self.clean_text)
+                
+                # Таблица жесткого соответствия из изображения {76FD26B6-542B-487D-9B5E-ECA48038C15C}.png
+                coaching_mapping = {
+                    "основы современной психологии": ["общая психология"],
+                    "профессиональная этика психолога": ["профессиональная этика"],
+                    "психология личности": ["психология личности"],
+                    "управление конфликтами": ["основные понятия и положения психологии управления конфликтами"],
+                    "психодиагностика": ["теоретические основы психодиагностики", "психодиагностика в психотерапии"],
+                    "психология труда": ["основные понятия и положения психологии труда организационной психологии и психологии управления"],
+                    "организационная психология": ["практикум по организационной психологии"],
+                    "социальная психология переговоров": ["практикум по ведению деловых переговоров и публичным выступлениям"],
+                    "защита итоговой аттестационной работы": ["защита итоговой аттестационной работы"]
+                }
+                
+                for idx, row in report.iterrows():
+                    cur_val = row['Средний процент']
+                    try:
+                        current_score = float(cur_val) if pd.notna(cur_val) else 0.0
+                    except ValueError:
+                        current_score = 0.0
+                        
+                    utp_mod_clean = self.clean_text(row['Модули'])
+                    best_score = current_score
+                    coaching_applied = False
+                    
+                    for _, co_row in df_co.iterrows():
+                        co_mod_clean = co_row['clean_coaching']
+                        
+                        # Поиск совпадения исходного модуля коучинга в таблице сопоставления
+                        best_key_ratio = 0
+                        matched_key = None
+                        for key in coaching_mapping.keys():
+                            key_ratio = fuzz.token_set_ratio(co_mod_clean, key)
+                            if key_ratio > best_key_ratio and key_ratio > 80:
+                                best_key_ratio = key_ratio
+                                matched_key = key
+                        
+                        if matched_key:
+                            # Проверяем, совпадает ли текущий модуль из УТП 1500 ПК с целевыми модулями из карты маппинга
+                            target_modules = coaching_mapping[matched_key]
+                            for target_mod in target_modules:
+                                target_ratio = fuzz.token_set_ratio(utp_mod_clean, target_mod)
+                                if target_ratio > 80:
+                                    try:
+                                        candidate_score = float(co_row['re_score'])
+                                        if candidate_score > best_score:
+                                            best_score = candidate_score
+                                            coaching_applied = True
+                                    except (ValueError, TypeError):
+                                        pass
+                    
+                    if coaching_applied and best_score > current_score:
+                        report.at[idx, 'Средний процент'] = best_score
+                        grade_text = self.get_final_grade_text(best_score, row['Форма аттестации'])
+                        report.at[idx, 'Итоговая оценка'] = f"{grade_text} (перезачет коучинг)"
 
             clean_name = re.sub(r'[\\/*?:"<>|]', "", student_info)
             save_p = filedialog.asksaveasfilename(
